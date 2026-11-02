@@ -70,7 +70,7 @@ const deliverPending = async (store, config, send, { pause = () => new Promise(r
         if (stopped()) break;
         if (!canDeliver(destination, delivery.itemId)) continue;
         try {
-            await send(delivery.message, delivery.photos, config);
+            await send(delivery.message, delivery.photos, config, { itemUrl: delivery.itemUrl });
             store.markDelivered(destination, delivery.itemId);
         } catch (error) {
             if (error.destinationFailure) {

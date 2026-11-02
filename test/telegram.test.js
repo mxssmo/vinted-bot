@@ -59,3 +59,74 @@ test('bad chat is treated as destination failure, not a bad listing', async () =
         response(400, { ok: false, error_code: 400, description: 'Bad Request: chat not found' })
     }), error => error.destinationFailure && !error.permanent);
 });
+
+for (const photos of [[], ['photo'], ['broken']]) {
+    test(`listing button survives ${photos[0] === 'broken' ? 'photo rejection' : photos.length ? 'photo delivery' : 'text delivery'}`, async () => {
+        let calls = 0;
+        await sendMessageToTelegram('<b>Shirt</b>', photos, config, {
+            itemUrl: 'https://www.vinted.it/items/123-shirt',
+            fetchImpl: async (_, options) => {
+                calls++;
+                const body = JSON.parse(options.body);
+                assert.deepEqual(body.reply_markup.inline_keyboard, [[{ text: 'Open on Vinted ↗', url: 'https://www.vinted.it/items/123-shirt' }]]);
+                return photos[0] === 'broken' && calls === 1
+                    ? response(400, { ok: false, error_code: 400 }) : response(200, { ok: true });
+            }
+        });
+        assert.equal(calls, photos[0] === 'broken' ? 2 : 1);
+    });
+}
+
+test('album retains one caption link without an extra message or unsupported keyboard', async () => {
+    let calls = 0;
+    await sendMessageToTelegram('<b>Shirt</b>', ['a', 'b'], config, {
+        itemUrl: 'https://www.vinted.it/items/123-shirt?x=1&y=2',
+        fetchImpl: async (url, options) => {
+            calls++;
+            assert.ok(url.endsWith('/sendMediaGroup'));
+            const body = JSON.parse(options.body);
+            assert.equal(body.reply_markup, undefined);
+            assert.ok(body.media[0].caption.includes('href="https://www.vinted.it/items/123-shirt?x=1&amp;y=2"'));
+            return response(200, { ok: true });
+        }
+    });
+    assert.equal(calls, 1);
+});
+
+test('long attribute lists use one complete text alert rather than an oversized photo caption', async () => {
+    const message = `<b>Shirt</b>\nMateriale: ${'cotone '.repeat(200)}`;
+    let calls = 0;
+    await sendMessageToTelegram(message, ['photo'], config, {
+        itemUrl: 'https://www.vinted.it/items/123-shirt',
+        fetchImpl: async (url, options) => {
+            calls++;
+            assert.ok(url.endsWith('/sendMessage'));
+            const body = JSON.parse(options.body);
+            assert.equal(body.text, message);
+            assert.ok(body.reply_markup);
+            return response(200, { ok: true });
+        }
+    });
+    assert.equal(calls, 1);
+});
+
+test('very long attributes are split without losing values or breaking emoji and HTML entities', async () => {
+    const text = `Shirt\nMateriale: ${'🧵 & cotone '.repeat(900)}`;
+    const message = `<b>${text.replace(/&/g, '&amp;')}</b>`;
+    const chunks = [];
+    await sendMessageToTelegram(message, ['photo'], config, {
+        itemUrl: 'https://www.vinted.it/items/123-shirt',
+        fetchImpl: async (url, options) => {
+            assert.ok(url.endsWith('/sendMessage'));
+            const body = JSON.parse(options.body);
+            assert.ok(body.text.length > 0 && body.text.length <= 4096);
+            assert.equal(body.parse_mode, undefined);
+            assert.ok(!/[\uD800-\uDBFF]$/.test(body.text));
+            chunks.push(body);
+            return response(200, { ok: true });
+        }
+    });
+    assert.equal(chunks.map(chunk => chunk.text).join(''), text);
+    assert.ok(chunks.at(-1).reply_markup);
+    assert.ok(chunks.slice(0, -1).every(chunk => !chunk.reply_markup));
+});

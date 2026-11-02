@@ -7,6 +7,44 @@ const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fet
 // prevent catalog searches and ordinary alerts from working.
 const pageCooldown = new VintedCooldown();
 
+const attributeText = value => {
+    const text = value.replace(/\s+/g, ' ').trim();
+    return text && !/^(unknown|sconosciut[oa]|n\/?a|[-—]|non specificat[oa]|not specified)$/i.test(text) ? text : null;
+};
+
+const attributesFromDocument = $ => {
+    const attributes = [];
+    const seen = new Set();
+    $('.details-list__item, [data-testid^="item-attributes-"]').each((_, element) => {
+        const row = $(element);
+        // React's streamed HTML keeps real sidebar content in hidden S:*
+        // containers until hydration. These are data, not hidden UI variants.
+        const hidden = row.parents().addBack().filter('[hidden], [aria-hidden="true"]')
+            .toArray().some(node => !/^S:[\da-z]+$/i.test($(node).attr('id') || ''));
+        if (hidden) return;
+        let cells = row.children('.details-list__item-value');
+        // Some item-page versions omit the details-list classes but keep the
+        // attribute test ID and its two label/value children.
+        if (cells.length !== 2 && row.attr('data-testid')?.startsWith('item-attributes-')) cells = row.children('div');
+        if (cells.length !== 2) return;
+        const read = cell => {
+            const copy = cell.clone();
+            copy.find('button, svg, script, style, [hidden], [aria-hidden="true"]').remove();
+            return attributeText(copy.text());
+        };
+        const label = read(cells.eq(0));
+        const value = read(cells.eq(1));
+        if (!label || !value) return;
+        const identity = label.toLocaleLowerCase();
+        if (seen.has(identity)) return;
+        seen.add(identity);
+        const key = (cells.eq(1).attr('itemprop') || row.attr('data-testid')?.replace(/^item-attributes-/, '') || '')
+            .replace(/[-\s]/g, '_');
+        attributes.push({ key, label, value });
+    });
+    return attributes;
+};
+
 const shippingFromDocument = $ => {
     // This is the actual visible shipping banner, not the item total, service
     // fee, translation strings or recommended listings' prices.
@@ -26,7 +64,23 @@ const parseItemPageDetails = html => {
         .first().text().replace(/\s+/g, ' ').trim();
     const listed = label && label.length <= 120 && !/^(unknown|sconosciut[oa]|n\/a|[-—])$/i.test(label)
         ? label : null;
-    return { shipping_from: shippingFromDocument($), listed_at_label: listed };
+    const color = $('[data-testid="item-attributes-color"] [itemprop="color"]')
+        .first().text().replace(/\s+/g, ' ').trim();
+    const colorTitle = color && color.length <= 120 && !/^(unknown|sconosciut[oa]|n\/a|[-—])$/i.test(color)
+        ? color : null;
+    const attributes = attributesFromDocument($);
+    const details = {
+        shipping_from: shippingFromDocument($), listed_at_label: listed, color_title: colorTitle,
+        extra_attributes: attributes.filter(attribute => !['size', 'status', 'color', 'upload_date'].includes(attribute.key))
+            .map(({ label, value }) => ({ label, value }))
+    };
+    // Fill the compact fields from the actual item page as well, so they are
+    // shown even when the catalogue response did not contain them.
+    for (const [key, field] of [['size', 'size_title'], ['status', 'status'], ['color', 'color_title'], ['upload_date', 'listed_at_label']]) {
+        const value = attributes.find(attribute => attribute.key === key)?.value;
+        if (value && (!['color', 'upload_date'].includes(key) || value.length <= 120)) details[field] = value;
+    }
+    return details;
 };
 
 const parseShippingFrom = html => parseItemPageDetails(html).shipping_from;
@@ -65,8 +119,10 @@ const getItemPageDetails = async (item, {
 
 const enrichItemPage = async (item, payload, { lookup = getItemPageDetails } = {}) => {
     const details = await lookup(item);
-    if (!details || (!details.shipping_from && !details.listed_at_label)) return payload;
-    return { ...payload, message: prepareAlert({ ...item, ...details }).message };
+    if (!details) return payload;
+    const available = Object.fromEntries(Object.entries(details).filter(([, value]) => Array.isArray(value) ? value.length : value));
+    if (!Object.keys(available).length) return payload;
+    return { ...payload, message: prepareAlert({ ...item, ...available }).message };
 };
 
 module.exports = { parseShippingFrom, parseItemPageDetails, getItemPageDetails, enrichItemPage };

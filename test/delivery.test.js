@@ -59,10 +59,32 @@ test('same listing can be sent to separate bots and chats; token rotation preser
 
 test('listing HTML is escaped', () => {
     const { formatMessage } = require('../utils/mssgFormat');
-    const message = formatMessage({ title: 'A & <B>', size_title: '<M>', url: 'https://example.com/?x="' }, 10, 'now');
+    const message = formatMessage({ title: 'A & <B>', size_title: '<M>', color_title: '"Black"', status: '<New>' }, 10, 'now');
     assert.ok(message.includes('A &amp; &lt;B&gt;'));
     assert.ok(message.includes('&lt;M&gt;'));
     assert.ok(message.includes('&quot;'));
+    assert.ok(message.includes('&lt;New&gt;'));
+});
+
+test('queued listing keeps its Vinted button URL through storage and delivery', async t => {
+    const store = new DeliveryStore(':memory:');
+    t.after(() => store.close());
+    const { prepareAlert } = require('../services/listingService');
+    const { sendMessageToTelegram } = require('../services/telegramService');
+    const itemUrl = 'https://www.vinted.it/items/123-shirt';
+    store.enqueue(destinationKey(config), 123, prepareAlert({ title: 'Shirt', price: 4, url: itemUrl }));
+    let calls = 0;
+    await deliverPending(store, config, (message, photos, target, sendOptions) => sendMessageToTelegram(message, photos, target, {
+        ...sendOptions,
+        fetchImpl: async (_, request) => {
+            calls++;
+            const body = JSON.parse(request.body);
+            assert.equal(body.reply_markup.inline_keyboard[0][0].url, itemUrl);
+            return { ok: true, json: async () => ({ ok: true }) };
+        }
+    }), options);
+    assert.equal(calls, 1);
+    assert.equal(store.pending(destinationKey(config)).length, 0);
 });
 
 test('permanently rejected item is isolated and the next alert is delivered', async () => {

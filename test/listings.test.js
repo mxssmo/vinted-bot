@@ -34,7 +34,7 @@ test('missing URL is recoverable and malformed optional fields do not fail forma
     assert.equal(item.url, 'https://www.vinted.it/items/1');
     const alert = prepareAlert(item);
     assert.ok(!alert.message.includes('Listed:'));
-    assert.ok(alert.message.includes('Size: Unknown'));
+    assert.ok(!alert.message.includes('Unknown'));
     assert.deepEqual(alert.photos, ['https://images.example/cover.jpg']);
     assert.deepEqual(prepareAlert({ ...item, photos: [null, {}, { url: 'javascript:bad' }] }).photos, []);
 });

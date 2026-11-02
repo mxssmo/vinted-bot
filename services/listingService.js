@@ -49,6 +49,7 @@ const prepareAlert = item => {
     }
     return {
         message: formatMessage(item, item.price, uploadTime),
+        itemUrl: item.url,
         photos: photos.filter(url => {
             if (typeof url !== 'string') return false;
             try { return ['http:', 'https:'].includes(new URL(url).protocol); } catch { return false; }

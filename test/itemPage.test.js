@@ -32,8 +32,8 @@ test('successful item lookup adds the starting amount and no account-specific to
         }
     });
     const payload = await enrichItemPage(item, prepareAlert(item), { lookup: async () => details });
-    assert.ok(payload.message.includes('🚚 Shipping from: 4,39 €'));
-    assert.ok(payload.message.includes('Price: 20.00 EUR'));
+    assert.ok(payload.message.includes('🚚 Shipping from 4,39 €'));
+    assert.ok(payload.message.includes('<b>€20.00</b>'));
     const missing = await enrichItemPage(item, prepareAlert(item), { lookup: async () => null });
     assert.ok(!missing.message.includes('Shipping'));
 });
@@ -58,7 +58,7 @@ test('blocked item pages back off without blocking catalog searches or failing a
 test('network failures and absent banners do not prevent alerts', async () => {
     const base = { cooldown: new VintedCooldown(), catalogCooldown: new VintedCooldown(), cookieFetcher: async () => 'anonymous-test', onWarning: () => {} };
     assert.equal(await getItemPageDetails(item, { ...base, fetchImpl: async () => { throw Error('timeout'); } }), null);
-    assert.deepEqual(await getItemPageDetails(item, { ...base, fetchImpl: async () => ({ ok: true, status: 200, text: async () => '<h1>Shirt</h1>' }) }), { shipping_from: null, listed_at_label: null });
+    assert.deepEqual(await getItemPageDetails(item, { ...base, fetchImpl: async () => ({ ok: true, status: 200, text: async () => '<h1>Shirt</h1>' }) }), { shipping_from: null, listed_at_label: null, color_title: null, extra_attributes: [] });
 });
 
 test('enriches only five selected unseen matches and respects a pause during lookup', async t => {
@@ -79,7 +79,7 @@ test('enriches only five selected unseen matches and respects a pause during loo
     });
     assert.deepEqual(lookedUp, [2, 3, 4, 5, 6]);
     assert.equal(store.pending(destination).length, 5);
-    assert.ok(store.pending(destination).every(alert => alert.message.includes('Shipping from: 4,39 €')));
+    assert.ok(store.pending(destination).every(alert => alert.message.includes('Shipping from 4,39 €')));
     await queueMatchingItems(items, config.urls[0], config, store, {
         searches, searchEntry,
         enrich: async (item, payload) => {
@@ -94,7 +94,7 @@ const listingAge = value => `<div data-testid="item-attributes-upload_date"><div
 
 test('extracts the real listing-age value without its label or unrelated dates', () => {
     assert.deepEqual(parseItemPageDetails(`${banner('da 4,39 €')}${listingAge('2 min fa')}`), {
-        shipping_from: '4,39 €', listed_at_label: '2 min fa'
+        shipping_from: '4,39 €', listed_at_label: '2 min fa', color_title: null, extra_attributes: []
     });
     assert.equal(parseItemPageDetails('<span itemprop="upload_date">unrelated</span>').listed_at_label, null);
     for (const invalid of ['', 'Unknown', '—', 'x'.repeat(121)]) {
@@ -114,7 +114,7 @@ test('one page request supplies both listing age and shipping to the alert', asy
     const alert = await enrichItemPage(item, prepareAlert(item), { lookup: async () => details });
     assert.equal(calls, 1);
     assert.ok(alert.message.includes('Listed: 2 min fa'));
-    assert.ok(alert.message.includes('Shipping from: 4,39 €'));
+    assert.ok(alert.message.includes('Shipping from 4,39 €'));
     assert.ok(!alert.message.includes('Listed: Unknown'));
 });
 
@@ -122,7 +122,7 @@ test('listing age enriches the alert even when the shipping price is absent', as
     const details = parseItemPageDetails(listingAge('3 giorni fa'));
     const alert = await enrichItemPage(item, prepareAlert(item), { lookup: async () => details });
     assert.ok(alert.message.includes('Listed: 3 giorni fa'));
-    assert.ok(!alert.message.includes('Shipping from:'));
+    assert.ok(!alert.message.includes('Shipping from'));
 });
 
 test('missing dates are omitted; photo timestamps are never used as listing dates', () => {
@@ -139,6 +139,78 @@ test('listing text is escaped and missing page data still permits ordinary alert
     });
     assert.ok(alert.message.includes('Listed: &lt;b&gt;2 min fa&lt;/b&gt;'));
     const withoutPage = await enrichItemPage(item, prepareAlert(item), { lookup: async () => null });
-    assert.ok(withoutPage.message.includes('Price: 20.00 EUR'));
+    assert.ok(withoutPage.message.includes('<b>€20.00</b>'));
     assert.ok(!withoutPage.message.includes('Listed:'));
+});
+
+test('color-only page data enriches the alert without including the attribute label', async () => {
+    const html = '<div data-testid="item-attributes-color"><div>Colore</div><div itemprop="color"><span>Panna, Beige</span></div></div>';
+    const details = parseItemPageDetails(html);
+    assert.equal(details.color_title, 'Panna, Beige');
+    const alert = await enrichItemPage({ ...item, size_title: 'L' }, prepareAlert(item), { lookup: async () => details });
+    assert.ok(alert.message.includes('📏 L · 🎨 Panna, Beige'));
+    assert.ok(!alert.message.includes('Colore'));
+    assert.equal(parseItemPageDetails('<span itemprop="color">unrelated</span>').color_title, null);
+});
+
+const attributeRow = (label, value, property = '') => `<div class="details-list__item"><div class="details-list__item-value">${label}</div><div class="details-list__item-value"${property ? ` itemprop="${property}"` : ''}>${value}</div></div>`;
+
+test('extracts category-specific attributes with original labels, values and units', () => {
+    const html = [
+        attributeRow('Brand', '<a href="/brand/1">Levi’s</a>'),
+        attributeRow('Materiale', '98% cotone, 2% elastan', 'material'),
+        attributeRow('Larghezza', '52&nbsp;cm', 'width'),
+        attributeRow('Lunghezza', '70 cm', 'length'),
+        attributeRow('Capacità', '128 GB'),
+        attributeRow('Materiale', '98% cotone, 2% elastan', 'material'),
+        attributeRow('Vuoto', ''), attributeRow('Non noto', 'Unknown'),
+        attributeRow('Solo etichetta', '<button>Informazioni</button>'),
+        `<div hidden>${attributeRow('Campo nascosto', 'no')}</div>`
+    ].join('');
+    assert.deepEqual(parseItemPageDetails(html).extra_attributes, [
+        { label: 'Brand', value: 'Levi’s' },
+        { label: 'Materiale', value: '98% cotone, 2% elastan' },
+        { label: 'Larghezza', value: '52 cm' },
+        { label: 'Lunghezza', value: '70 cm' },
+        { label: 'Capacità', value: '128 GB' }
+    ]);
+});
+
+test('page attributes populate compact fields without duplicating them as extras', async () => {
+    const details = parseItemPageDetails([
+        attributeRow('Taglia', 'L<button><svg><title>Size FAQ</title></svg></button>', 'size'),
+        attributeRow('Colore', 'Nero', 'color'),
+        attributeRow('Condizioni', 'Ottime', 'status'),
+        attributeRow('Caricato', '2 min fa', 'upload_date'),
+        attributeRow('Materiale', 'Cotone', 'material')
+    ].join(''));
+    const alert = await enrichItemPage(item, prepareAlert(item), { lookup: async () => details });
+    assert.ok(alert.message.includes('📏 L · 🎨 Nero'));
+    assert.ok(alert.message.includes('✨ Ottime'));
+    assert.ok(alert.message.includes('Materiale: Cotone'));
+    assert.ok(alert.message.includes('Listed: 2 min fa'));
+    for (const label of ['Taglia:', 'Colore:', 'Condizioni:', 'Caricato:', 'Size FAQ']) assert.ok(!alert.message.includes(label));
+    assert.deepEqual(details.extra_attributes, [{ label: 'Materiale', value: 'Cotone' }]);
+});
+
+test('attributes alone enrich and persist in the queued alert using only one lookup', async t => {
+    const store = new DeliveryStore(':memory:');
+    t.after(() => store.close());
+    const config = { botToken: '123:test', chatId: '456', priceLimit: 30 };
+    let lookups = 0;
+    await queueMatchingItems([item], 'https://www.vinted.it/catalog', config, store, {
+        enrich: (entry, payload) => enrichItemPage(entry, payload, { lookup: async () => {
+            lookups++;
+            return parseItemPageDetails(attributeRow('Larghezza', '52 cm'));
+        } })
+    });
+    assert.equal(lookups, 1);
+    assert.ok(store.pending(destinationKey(config))[0].message.includes('Larghezza: 52 cm'));
+});
+
+test('reads the real React streamed sidebar before browser hydration', () => {
+    const html = `<div hidden id="S:8">${attributeRow('Brand', 'Suitsupply')}${attributeRow('Taglia', '50', 'size')}${attributeRow('Materiale', 'Lino', 'material')}</div>`;
+    const details = parseItemPageDetails(html);
+    assert.equal(details.size_title, '50');
+    assert.deepEqual(details.extra_attributes, [{ label: 'Brand', value: 'Suitsupply' }, { label: 'Materiale', value: 'Lino' }]);
 });

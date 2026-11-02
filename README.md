@@ -11,8 +11,9 @@ No dashboard, public server, Docker, or PM2 is required. Run it on your computer
 - Watches multiple search URLs in each Telegram bot.
 - Selects up to **five newest unseen matches per search per cycle**, from the first results page only.
 - Lets you add, replace, pause, resume, and delete searches in Telegram.
-- Sends listing photos, price, size, condition, and a link to Vinted.
+- Sends listing photos, price, size, color, condition, and a button to open Vinted.
 - Adds the public **starting shipping price** and **listing age** when available.
+- Includes all available structured item attributes, such as brand, material and measurements, using Vinted's original labels and values.
 - Remembers searches and delivery history across restarts using SQLite.
 - Creates daily database backups and exposes health information through `/status`.
 
@@ -21,18 +22,22 @@ No dashboard, public server, Docker, or PM2 is required. Run it on your computer
 A listing photo arrives with a caption like this:
 
 ```text
-🏷️ Linen shirt
+Linen shirt
 
-💰 Price: 12.00 EUR
-🚚 Shipping from: 4,39 €
-📏 Size: L
-📦 Status: Ottime
+€12.00 · 🚚 Shipping from 4,39 €
+📏 L · 🎨 Panna, Beige
+✨ Ottime
+Brand: Suitsupply
+Materiale: Lino
+Larghezza: 52 cm
 🕒 Listed: 2 min fa
-
-🔗 View on Vinted
 ```
 
-*Illustrative values. Shipping and listing age are omitted when unavailable. Vinted's listing details may appear in the language of the selected marketplace.*
+The title and price are bold. An **Open on Vinted ↗** button appears below single-photo and text alerts; albums include a caption link instead.
+
+*Illustrative values. Missing details are omitted. Attributes, shipping and listing age come from the same optional item-page lookup. Measurements are included when provided as structured attributes; they are not inferred from photos or free-text descriptions. Vinted's listing details may appear in the language of the selected marketplace.*
+
+If all details exceed Telegram's photo-caption limit, the alert is sent as complete text with the Vinted button instead of a photo. Exceptionally long alerts are split into text messages without dropping attributes.
 
 ## Quick start
 
